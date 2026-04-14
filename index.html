@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Florida Man Calendar</title>
+    <!-- <link rel="stylesheet" href="style.css"></link> -->
+</head>
+<body>
+
+  <h1>Florida Man Calendar</h1>
+ 
+  <label for="year">Year:</label>
+  <select id="year">
+    <!-- Options will be populated by JS -->
+  </select>
+ 
+  <label for="month">Month:</label>
+  <select id="month">
+    <option value="January">January</option>
+    <option value="February">February</option>
+    <option value="March">March</option>
+    <option value="April">April</option>
+    <option value="May">May</option>
+    <option value="June">June</option>
+    <option value="July">July</option>
+    <option value="August">August</option>
+    <option value="September">September</option>
+    <option value="October">October</option>
+    <option value="November">November</option>
+    <option value="December">December</option>
+  </select>
+ 
+  <label for="day">Day:</label>
+  <select id="day"></select>
+ 
+  <button onclick="search()">Find My Florida Man</button>
+ 
+  <div id="result"></div>
+
+  <!-- <script async src="https://cse.google.com/cse.js?cx=3162d13ac253d4fed">
+    </script>
+    <div class="gcse-search"></div> -->
+ 
+  <script src="script.js"></script>
+</body>
+</html>
