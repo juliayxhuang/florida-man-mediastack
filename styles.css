@@ -1,0 +1,176 @@
+@import url('https://fonts.googleapis.com/css2?family=Kosugi&display=swap');
+
+/* BASE */
+body {
+  margin: 0;
+  background: #e9e9e9;
+  font-family: 'Kosugi', sans-serif;
+}
+
+/* =========================
+   MOBILE FIRST (DEFAULT)
+   ========================= */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  padding: 30px 20px;
+  gap: 40px;
+  box-sizing: border-box;
+}
+
+/* HEADLINE */
+.headline-section {
+  max-width: 100%;
+}
+
+h1 {
+  font-family: serif;
+  font-size: 34px;
+  line-height: 1.2;
+  font-weight: normal;
+  margin: 0 0 15px 0;
+}
+
+#meta {
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: #777;
+  text-transform: uppercase;
+}
+
+/* CONTROLS */
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  align-items: center;
+  width: 100%;
+}
+
+/* CALENDAR BOX */
+.calendar-box {
+  background: black;
+  color: white;
+  padding: 20px;
+  border-radius: 16px;
+  width: 100%;
+  box-sizing: border-box;
+
+  display: flex;
+  flex-direction: column;
+}
+
+/* MONTHS (TOP ON MOBILE) */
+.months {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 10px;
+  font-size: 14px;
+  margin-bottom: 20px;
+  order: -1;
+}
+
+.month {
+  cursor: pointer;
+  text-align: center;
+  opacity: 0.6;
+}
+
+.month.selected {
+  opacity: 1;
+  font-weight: bold;
+}
+
+/* DAYS */
+.days {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 12px;
+}
+
+.day {
+  text-align: center;
+  cursor: pointer;
+  font-size: 18px;
+  opacity: 0.6;
+
+  padding: 6px 0; /* move padding here */
+  border-radius: 8px;
+}
+
+.day.selected {
+  background: #e6e6e6;
+  color: black;
+  opacity: 1;
+}
+
+/* BUTTON */
+button {
+  width: 100%;
+  background: black;
+  color: white;
+  border: none;
+  padding: 18px;
+  border-radius: 16px;
+  font-family: 'Kosugi', sans-serif;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+button:hover {
+  opacity: 0.85;
+}
+
+/* =========================
+   DESKTOP / TABLET (≥768px)
+   ========================= */
+
+@media (min-width: 768px) {
+
+  .container {
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 60px;
+    height: 100vh;
+  }
+
+  .headline-section {
+    max-width: 65%;
+  }
+
+  h1 {
+    font-size: 56px;
+    line-height: 1.1;
+  }
+
+  #meta {
+    font-size: 12px;
+  }
+
+  .controls {
+    align-items: flex-end;
+    width: auto;
+  }
+
+  .calendar-box {
+    width: 260px;
+    border-radius: 20px;
+  }
+
+  .months {
+    order: 0;
+    margin-bottom: 0;
+  }
+
+  button {
+    width: auto;
+    padding: 15px 25px;
+    font-size: 14px;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}

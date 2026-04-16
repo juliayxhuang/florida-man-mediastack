@@ -1,87 +1,87 @@
-// ============================================
-// 🔑 MEDIASTACK API KEY (Get from https://mediastack.com/)
-// ============================================
-const MEDIASTACK_API_KEY = "5ca5b9750c69918840bf5688c1cccf8e";
-// ============================================
+const headlineEl = document.getElementById("headline");
+const metaEl = document.getElementById("meta");
+const daysContainer = document.getElementById("days");
+const monthsContainer = document.getElementById("months");
+const button = document.getElementById("generateBtn");
 
-function populateYears() {
-  const yearEl = document.getElementById('year');
-  const currentYear = new Date().getFullYear();
-  for (let y = 2000; y <= currentYear; y++) {
-    const opt = document.createElement('option');
-    opt.value = y;
-    opt.textContent = y;
-    if (y === currentYear) opt.selected = true;
-    yearEl.appendChild(opt);
-  }
+let selectedDay = null;
+let selectedMonth = null;
+
+// MONTHS
+const months = [
+  "January","February","March","April","May","June",
+  "July","August","September","October","November","December"
+];
+
+// RENDER DAYS (1–31)
+for (let i = 1; i <= 31; i++) {
+  const div = document.createElement("div");
+  div.textContent = i;
+  div.classList.add("day");
+
+  div.addEventListener("click", () => {
+    document.querySelectorAll(".day").forEach(d => d.classList.remove("selected"));
+    div.classList.add("selected");
+    selectedDay = i;
+  });
+
+  daysContainer.appendChild(div);
 }
 
-function populateDays() {
-  const year = document.getElementById('year').value;
-  const month = document.getElementById('month').value;
-  const daysInMonth = new Date(year, new Date(month + ' 1').getMonth() + 1, 0).getDate();
-  const dayEl = document.getElementById('day');
-  const current = parseInt(dayEl.value) || 1;
-  dayEl.innerHTML = '';
-  for (let i = 1; i <= daysInMonth; i++) {
-    const opt = document.createElement('option');
-    opt.value = i;
-    opt.textContent = i;
-    if (i === current) opt.selected = true;
-    dayEl.appendChild(opt);
+// RENDER MONTHS
+months.forEach(month => {
+  const div = document.createElement("div");
+  div.textContent = month.slice(0, 3).toLowerCase();
+  div.classList.add("month");
+
+  div.addEventListener("click", () => {
+    document.querySelectorAll(".month").forEach(m => m.classList.remove("selected"));
+    div.classList.add("selected");
+    selectedMonth = month;
+  });
+
+  monthsContainer.appendChild(div);
+});
+
+// FETCH HEADLINE
+button.addEventListener("click", async () => {
+
+  if (!selectedDay || !selectedMonth) {
+    return; // silently do nothing (as requested)
   }
-}
 
-document.getElementById('year').addEventListener('change', populateDays);
-document.getElementById('month').addEventListener('change', populateDays);
-populateYears();
-populateDays();
-
-async function search() {
-  const year = document.getElementById('year').value;
-  const month = document.getElementById('month').value;
-  const day = document.getElementById('day').value;
-  const resultEl = document.getElementById('result');
-
-  resultEl.innerHTML = '<p>Loading...</p>';
-
-  // Convert month name to search-friendly format
-  const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-  const monthIndex = monthNames.indexOf(month) + 1;
-  const dateStr = `${year}-${monthIndex.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
-
-  // Mediastack API - search with date filter
-  const url = `http://api.mediastack.com/v1/news?access_key=${MEDIASTACK_API_KEY}&keywords=florida man&date=${dateStr}&languages=en`;
+  headlineEl.textContent = "Loading...";
+  metaEl.textContent = "";
 
   try {
-    const res = await fetch(url);
-    const data = await res.json();
+    const query = encodeURIComponent(`Florida Man ${selectedMonth} ${selectedDay}`);
+    const url = `https://www.reddit.com/r/FloridaMan/search.json?q=${query}&restrict_sr=1&sort=relevance&limit=25`;
 
-    if (data.error) {
-      resultEl.innerHTML = `<p>Error: ${data.error.message}</p>`;
+    const response = await fetch(url, {
+      headers: { "Accept": "application/json" }
+    });
+
+    const data = await response.json();
+    const posts = data.data.children;
+
+    if (!posts || posts.length === 0) {
+      headlineEl.textContent = "No headlines found 😔";
       return;
     }
 
-    if (!data.data || data.data.length === 0) {
-      resultEl.innerHTML = `<p>No articles found for "florida man" on ${month} ${day}, ${year}.</p>`;
-      return;
-    }
+    const randomPost = posts[Math.floor(Math.random() * posts.length)];
 
-    // Pick the first article
-    const article = data.data[0];
-    const headline = article.title;
-    const source = article.source;
-    const pubDate = new Date(article.published_at).toLocaleDateString();
-    const description = article.description || 'No description available.';
-    const articleUrl = article.url;
-    resultEl.innerHTML = `
-      <h3>${headline}</h3>
-      <p><strong>Description:</strong> ${description}</p>
-      <p><small>Source: ${source} | Date: ${pubDate}</small></p>
-      <p><a href="${articleUrl}" target="_blank">Read full article</a></p>
-    `;
+    const title = randomPost.data.title;
+    const createdUTC = randomPost.data.created_utc;
+    const date = new Date(createdUTC * 1000);
+
+    const year = date.getFullYear();
+
+    headlineEl.textContent = title;
+    metaEl.textContent = `${selectedMonth.toUpperCase()} ${selectedDay}, ${year} · R/FLORIDAMAN`;
 
   } catch (err) {
-    resultEl.innerHTML = `<p>Something went wrong: ${err.message}</p>`;
+    console.error(err);
+    headlineEl.textContent = "Florida Man is being chaotic right now.";
   }
-}
+});
