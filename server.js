@@ -286,6 +286,10 @@ async function serveStatic(req, res) {
 const server = http.createServer(async (req, res) => {
   try {
     const { pathname } = new URL(req.url, `http://${req.headers.host}`);
+    if (pathname === "/health") {
+      sendJson(res, 200, { ok: true });
+      return;
+    }
     if (pathname === "/api/publish-date") {
       await handlePublishDateApi(req, res);
       return;
