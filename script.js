@@ -5,6 +5,7 @@ const verifyEl = document.getElementById("verify");
 const daysContainer = document.getElementById("days");
 const monthsContainer = document.getElementById("months");
 const button = document.getElementById("generateBtn");
+const strictToggle = document.getElementById("strictToggle");
 
 let selectedDay = null;
 let selectedMonth = null;
@@ -101,27 +102,23 @@ function formatLongDate(date) {
   });
 }
 
-async function fetchArticlePublishDate(articleUrl) {
-  if (!articleUrl) return { published: null, source: null, reason: "no_url" };
-
-  // If opened as a local file, there’s no server to proxy the request.
+async function fetchBestMatch(monthName, dayNumber, strictMode) {
   if (location.protocol === "file:") {
-    return { published: null, source: null, reason: "no_server_file_protocol" };
+    return { ok: false, reason: "no_server_file_protocol" };
   }
 
-  const apiUrl = `/api/publish-date?url=${encodeURIComponent(articleUrl)}`;
+  const apiUrl = `/api/find?month=${encodeURIComponent(monthName)}&day=${encodeURIComponent(
+    dayNumber
+  )}&strict=${strictMode ? "1" : "0"}`;
+
   try {
     const res = await fetch(apiUrl, { headers: { Accept: "application/json" } });
-    if (!res.ok) return { published: null, source: null, reason: "api_error" };
+    if (!res.ok) return { ok: false, reason: "api_error" };
     const data = await res.json();
-    if (!data?.ok || !data?.published) {
-      return { published: null, source: data?.source ?? null, reason: data?.reason ?? "not_found" };
-    }
-    const d = new Date(data.published);
-    if (Number.isNaN(d.getTime())) return { published: null, source: data?.source ?? null, reason: "bad_date" };
-    return { published: d, source: data.source ?? null, reason: null };
+    if (!data?.ok) return { ok: false, reason: "api_error" };
+    return data;
   } catch {
-    return { published: null, source: null, reason: "api_unreachable" };
+    return { ok: false, reason: "api_unreachable" };
   }
 }
 
@@ -138,111 +135,37 @@ button.addEventListener("click", async () => {
   verifyEl.textContent = "";
 
   try {
-    const query = encodeURIComponent(`Florida Man ${selectedMonth} ${selectedDay}`);
-    const url = `https://www.reddit.com/r/FloridaMan/search.json?q=${query}&restrict_sr=1&sort=relevance&limit=25`;
+    const strictMode = strictToggle ? strictToggle.checked : true;
+    const data = await fetchBestMatch(selectedMonth, selectedDay, strictMode);
 
-    const response = await fetch(url, {
-      headers: { "Accept": "application/json" }
-    });
-
-    const data = await response.json();
-    const posts = data.data.children;
-
-    if (!posts || posts.length === 0) {
-      headlineEl.textContent = "No headlines found 😔";
+    if (!data.ok) {
+      headlineEl.textContent = "Backend not reachable 😔";
+      verifyEl.textContent =
+        data.reason === "no_server_file_protocol"
+          ? "Open the Render URL (not file://) to use verification."
+          : "Try refreshing (or check /health on your Render service).";
       return;
     }
 
-    const titleMatchedPosts = posts.filter(p => {
-      const title = p?.data?.title || "";
-      return titleMatchesMonthDay(title, selectedMonth, selectedDay);
-    });
-
-    const dateMatchedPosts = posts.filter(p => {
-      const createdUTC = p?.data?.created_utc;
-      if (!createdUTC) return false;
-      const createdDate = new Date(createdUTC * 1000);
-      return isMonthDayMatchUtc(createdDate, selectedMonth, selectedDay);
-    });
-
-    const candidatePosts =
-      titleMatchedPosts.length > 0 ? titleMatchedPosts :
-      dateMatchedPosts.length > 0 ? dateMatchedPosts :
-      posts;
-
-    shuffleInPlace(candidatePosts);
-
-    let chosen = null;
-    let chosenRedditDate = null;
-    let chosenArticleUrl = null;
-    let chosenPublishDate = null;
-    let chosenPublishSource = null;
-    let chosenVerifyReason = null;
-
-    // Try a handful of candidates until we find one whose *article* publish date matches
-    // the selected month/day (when we can detect it).
-    const attempts = Math.min(8, candidatePosts.length);
-    for (let i = 0; i < attempts; i++) {
-      const post = candidatePosts[i];
-      const createdUTC = post.data.created_utc;
-      const redditDate = new Date(createdUTC * 1000);
-      const articleUrl = getExternalArticleUrl(post);
-
-      if (!articleUrl) {
-        chosen = post;
-        chosenRedditDate = redditDate;
-        chosenArticleUrl = null;
-        chosenPublishDate = null;
-        chosenPublishSource = null;
-        chosenVerifyReason = "no_external_link";
-        break;
-      }
-
-      const { published, source, reason } = await fetchArticlePublishDate(articleUrl);
-      if (!published) {
-        // If we can't detect a publish date, accept it (but message that it couldn't be verified).
-        chosen = post;
-        chosenRedditDate = redditDate;
-        chosenArticleUrl = articleUrl;
-        chosenPublishDate = null;
-        chosenPublishSource = source;
-        chosenVerifyReason =
-          (titleMatchedPosts.length === 0 && dateMatchedPosts.length === 0)
-            ? "no_frontend_date_match"
-            : (reason || "not_found");
-        break;
-      }
-
-      if (isMonthDayMatchUtc(published, selectedMonth, selectedDay)) {
-        chosen = post;
-        chosenRedditDate = redditDate;
-        chosenArticleUrl = articleUrl;
-        chosenPublishDate = published;
-        chosenPublishSource = source;
-        chosenVerifyReason = null;
-        break;
-      }
+    if (!data.result) {
+      headlineEl.textContent = strictMode
+        ? "No verified articles match that date 😔"
+        : "No headlines found 😔";
+      verifyEl.textContent = strictMode
+        ? "Try turning strict mode off."
+        : "Try a different date.";
+      return;
     }
 
-    if (!chosen) {
-      chosen = candidatePosts[0];
-      const createdUTC = chosen.data.created_utc;
-      chosenRedditDate = new Date(createdUTC * 1000);
-      chosenArticleUrl = getExternalArticleUrl(chosen);
-      chosenVerifyReason =
-        (titleMatchedPosts.length === 0 && dateMatchedPosts.length === 0)
-          ? "no_frontend_date_match"
-          : "no_verified_match";
-    }
-
-    const title = chosen.data.title;
-    const year = (chosenPublishDate || chosenRedditDate).getFullYear();
+    const title = data.result.title;
+    const published = data.result.published ? new Date(data.result.published) : null;
+    const redditCreated = data.result.redditCreated ? new Date(data.result.redditCreated) : null;
+    const year = (published || redditCreated || new Date()).getFullYear();
 
     headlineEl.textContent = title;
     metaEl.textContent = `${selectedMonth.toUpperCase()} ${selectedDay}, ${year} · R/FLORIDAMAN`;
 
-    const redditLink = getRedditPermalink(chosen);
-    const linkToShow = chosenArticleUrl || redditLink;
+    const linkToShow = data.result.articleUrl || data.result.redditUrl;
     if (linkToShow) {
       sourceEl.textContent = "Source: ";
       const a = document.createElement("a");
@@ -253,20 +176,14 @@ button.addEventListener("click", async () => {
       sourceEl.appendChild(a);
     }
 
-    if (chosenPublishDate) {
-      verifyEl.textContent = `Verified publish date: ${formatLongDate(chosenPublishDate)} (${chosenPublishSource || "detected"})`;
-    } else if (chosenVerifyReason === "no_external_link") {
-      verifyEl.textContent = "No external article link on this post (using Reddit post date).";
-    } else if (chosenVerifyReason === "no_server_file_protocol") {
-      verifyEl.textContent = "Open via the local server to verify publish dates (file:// can’t fetch articles).";
-    } else if (chosenVerifyReason === "api_unreachable") {
-      verifyEl.textContent = "Publish-date verifier server not reachable (using Reddit post date).";
-    } else if (chosenVerifyReason === "no_frontend_date_match") {
-      verifyEl.textContent = "Couldn’t find an exact match for that date in results (showing the closest match).";
-    } else if (chosenVerifyReason === "no_verified_match") {
-      verifyEl.textContent = "Couldn’t find a matching publish date (showing a Reddit-matched post).";
+    if (data.result.matched && published) {
+      verifyEl.textContent = `Verified publish date (NY): ${formatLongDate(published)} (${data.result.publishSource || "detected"})`;
+    } else if (!data.result.articleUrl) {
+      verifyEl.textContent = "No external article link found (showing Reddit post).";
+    } else if (!published) {
+      verifyEl.textContent = "No matching publish date found (showing closest match).";
     } else {
-      verifyEl.textContent = "Couldn’t detect the article publish date (using Reddit post date).";
+      verifyEl.textContent = "Publish date didn’t match (showing closest match).";
     }
 
   } catch (err) {

@@ -22,6 +22,25 @@ const MIME_TYPES = new Map([
   [".ico", "image/x-icon"]
 ]);
 
+const months = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December"
+];
+
+const TZ = "America/New_York";
+const publishDateCache = new Map(); // url -> { publishedIso, source, cachedAtMs }
+const PUBLISH_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+
 function sendJson(res, statusCode, body) {
   const payload = JSON.stringify(body);
   res.writeHead(statusCode, {
@@ -130,6 +149,57 @@ function parseToDate(value) {
   return d;
 }
 
+function getMonthDayInTimeZone(date, timeZone) {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    month: "long",
+    day: "2-digit"
+  });
+  const parts = fmt.formatToParts(date);
+  const monthName = parts.find((p) => p.type === "month")?.value;
+  const day = parts.find((p) => p.type === "day")?.value;
+  if (!monthName || !day) return null;
+  return { monthName, day: Number(day) };
+}
+
+function normalizeMonth(raw) {
+  if (!raw) return null;
+  const s = String(raw).trim().toLowerCase();
+  if (!s) return null;
+
+  const asNum = Number(s);
+  if (Number.isFinite(asNum) && asNum >= 1 && asNum <= 12) return months[asNum - 1];
+
+  const byFull = months.find((m) => m.toLowerCase() === s);
+  if (byFull) return byFull;
+
+  if (s.length >= 3) {
+    const byAbbr = months.find((m) => m.slice(0, 3).toLowerCase() === s.slice(0, 3));
+    if (byAbbr) return byAbbr;
+  }
+
+  return null;
+}
+
+function getExternalArticleUrlFromReddit(post) {
+  const raw = post?.data?.url_overridden_by_dest || post?.data?.url;
+  if (!raw) return null;
+  try {
+    const u = new URL(raw);
+    const host = u.hostname.toLowerCase();
+    if (host.endsWith("reddit.com") || host === "redd.it") return null;
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+function getRedditPermalink(post) {
+  const permalink = post?.data?.permalink;
+  if (!permalink) return null;
+  return `https://www.reddit.com${permalink}`;
+}
+
 function pickBestCandidate(candidates) {
   const priority = [
     "meta:article:published_time",
@@ -155,6 +225,24 @@ function pickBestCandidate(candidates) {
   }
 
   return normalized[0] ?? null;
+}
+
+function extractPublishDateFromHtml(html) {
+  const metaCandidates = collectMetaCandidates(html);
+  const jsonLdBlocks = findJsonLdBlocks(html);
+
+  let jsonLdCandidates = [];
+  for (const block of jsonLdBlocks) {
+    try {
+      const json = JSON.parse(block);
+      jsonLdCandidates = jsonLdCandidates.concat(collectJsonLdCandidates(json));
+    } catch {
+      // ignore invalid json-ld blocks
+    }
+  }
+
+  const candidates = metaCandidates.concat(jsonLdCandidates);
+  return pickBestCandidate(candidates);
 }
 
 async function fetchHtmlWithLimits(url) {
@@ -208,6 +296,57 @@ async function fetchHtmlWithLimits(url) {
   }
 }
 
+async function getPublishDateForUrl(articleUrl) {
+  const now = Date.now();
+  const cached = publishDateCache.get(articleUrl);
+  if (cached && now - cached.cachedAtMs < PUBLISH_CACHE_TTL_MS) {
+    return {
+      ok: true,
+      url: articleUrl,
+      published: cached.publishedIso ? new Date(cached.publishedIso) : null,
+      source: cached.source ?? null,
+      cached: true
+    };
+  }
+
+  const target = safeParseUrl(articleUrl);
+  if (!target) {
+    return { ok: false, url: articleUrl, published: null, source: null, reason: "invalid_url" };
+  }
+  if (isPrivateHostname(target.hostname)) {
+    return { ok: false, url: articleUrl, published: null, source: null, reason: "blocked_hostname" };
+  }
+
+  const fetched = await fetchHtmlWithLimits(target.toString());
+  if (!fetched.ok || !fetched.html) {
+    publishDateCache.set(articleUrl, { publishedIso: null, source: null, cachedAtMs: now });
+    return {
+      ok: true,
+      url: target.toString(),
+      published: null,
+      source: null,
+      reason: "fetch_failed_or_non_html",
+      status: fetched.status,
+      contentType: fetched.contentType || null,
+      cached: false
+    };
+  }
+
+  const best = extractPublishDateFromHtml(fetched.html);
+  const publishedIso = best?.date ? best.date.toISOString() : null;
+  publishDateCache.set(articleUrl, { publishedIso, source: best?.source ?? null, cachedAtMs: now });
+
+  return {
+    ok: true,
+    url: target.toString(),
+    published: best?.date ?? null,
+    source: best?.source ?? null,
+    status: fetched.status,
+    contentType: fetched.contentType || null,
+    cached: false
+  };
+}
+
 async function handlePublishDateApi(req, res) {
   const reqUrl = new URL(req.url, `http://${req.headers.host}`);
   const raw = reqUrl.searchParams.get("url") || "";
@@ -222,43 +361,144 @@ async function handlePublishDateApi(req, res) {
     return;
   }
 
-  const fetched = await fetchHtmlWithLimits(target.toString());
-  if (!fetched.ok || !fetched.html) {
+  const result = await getPublishDateForUrl(target.toString());
+  sendJson(res, 200, {
+    ok: true,
+    url: result.url,
+    published: result.published ? result.published.toISOString() : null,
+    source: result.source ?? null,
+    reason: result.reason ?? null,
+    status: result.status ?? 200,
+    contentType: result.contentType ?? null,
+    cached: result.cached ?? false
+  });
+}
+
+async function fetchRedditPostsForDate(monthName, dayNumber) {
+  const query = `Florida Man ${monthName} ${dayNumber}`;
+  const url = `https://www.reddit.com/r/FloridaMan/search.json?q=${encodeURIComponent(
+    query
+  )}&restrict_sr=1&sort=relevance&limit=25`;
+
+  const res = await fetch(url, {
+    headers: {
+      "user-agent": "Mozilla/5.0 (compatible; FloridaManDateChecker/1.0)",
+      accept: "application/json"
+    }
+  });
+  if (!res.ok) return { ok: false, status: res.status, posts: [] };
+
+  const data = await res.json();
+  const posts = data?.data?.children || [];
+  return { ok: true, status: res.status, posts };
+}
+
+async function handleFindApi(req, res) {
+  const reqUrl = new URL(req.url, `http://${req.headers.host}`);
+  const monthName = normalizeMonth(reqUrl.searchParams.get("month"));
+  const dayNumber = Number(reqUrl.searchParams.get("day"));
+  const strict = (reqUrl.searchParams.get("strict") || "0") === "1";
+
+  if (!monthName || !Number.isFinite(dayNumber) || dayNumber < 1 || dayNumber > 31) {
+    sendJson(res, 400, { ok: false, error: "Invalid month/day" });
+    return;
+  }
+
+  const reddit = await fetchRedditPostsForDate(monthName, dayNumber);
+  if (!reddit.ok) {
+    sendJson(res, 200, { ok: true, strict, selected: { month: monthName, day: dayNumber }, result: null });
+    return;
+  }
+
+  const candidates = reddit.posts
+    .map((p) => {
+      const articleUrl = getExternalArticleUrlFromReddit(p);
+      const redditUrl = getRedditPermalink(p);
+      const title = p?.data?.title || null;
+      const createdUtc = p?.data?.created_utc ? new Date(p.data.created_utc * 1000) : null;
+      return { post: p, title, articleUrl, redditUrl, createdUtc };
+    })
+    .filter((c) => c.title);
+
+  const MAX_CHECKS = 20;
+  const CONCURRENCY = 4;
+  const toCheck = candidates.slice(0, MAX_CHECKS);
+
+  let found = null;
+  let checked = 0;
+
+  async function worker(startIndex) {
+    for (let i = startIndex; i < toCheck.length; i += CONCURRENCY) {
+      if (found) return;
+      const item = toCheck[i];
+      checked++;
+
+      if (!item.articleUrl) continue;
+      const pub = await getPublishDateForUrl(item.articleUrl);
+      if (!pub?.ok || !pub.published) continue;
+
+      const md = getMonthDayInTimeZone(pub.published, TZ);
+      if (!md) continue;
+      if (md.monthName === monthName && md.day === dayNumber) {
+        found = {
+          title: item.title,
+          redditUrl: item.redditUrl,
+          articleUrl: item.articleUrl,
+          redditCreated: item.createdUtc ? item.createdUtc.toISOString() : null,
+          published: pub.published.toISOString(),
+          publishSource: pub.source ?? null,
+          matched: true,
+          matchBasis: "publish_date"
+        };
+        return;
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: CONCURRENCY }, (_, idx) => worker(idx)));
+
+  if (found) {
     sendJson(res, 200, {
       ok: true,
-      url: target.toString(),
-      published: null,
-      source: null,
-      reason: "fetch_failed_or_non_html",
-      status: fetched.status,
-      contentType: fetched.contentType || null
+      strict,
+      selected: { month: monthName, day: dayNumber, timeZone: TZ },
+      checked,
+      result: found
     });
     return;
   }
 
-  const metaCandidates = collectMetaCandidates(fetched.html);
-  const jsonLdBlocks = findJsonLdBlocks(fetched.html);
-
-  let jsonLdCandidates = [];
-  for (const block of jsonLdBlocks) {
-    try {
-      const json = JSON.parse(block);
-      jsonLdCandidates = jsonLdCandidates.concat(collectJsonLdCandidates(json));
-    } catch {
-      // ignore invalid json-ld blocks
-    }
+  if (strict) {
+    sendJson(res, 200, {
+      ok: true,
+      strict,
+      selected: { month: monthName, day: dayNumber, timeZone: TZ },
+      checked,
+      result: null,
+      reason: "no_publish_date_match"
+    });
+    return;
   }
 
-  const candidates = metaCandidates.concat(jsonLdCandidates);
-  const best = pickBestCandidate(candidates);
-
+  const fallback = toCheck.find((c) => c.articleUrl) || toCheck[0] || null;
   sendJson(res, 200, {
     ok: true,
-    url: target.toString(),
-    published: best?.date ? best.date.toISOString() : null,
-    source: best?.source ?? null,
-    status: fetched.status,
-    contentType: fetched.contentType || null
+    strict,
+    selected: { month: monthName, day: dayNumber, timeZone: TZ },
+    checked,
+    result: fallback
+      ? {
+          title: fallback.title,
+          redditUrl: fallback.redditUrl,
+          articleUrl: fallback.articleUrl ?? null,
+          redditCreated: fallback.createdUtc ? fallback.createdUtc.toISOString() : null,
+          published: null,
+          publishSource: null,
+          matched: false,
+          matchBasis: "fallback"
+        }
+      : null,
+    reason: "fallback"
   });
 }
 
@@ -272,9 +512,10 @@ async function serveStatic(req, res) {
   try {
     const data = await readFile(filePath);
     const ext = path.extname(filePath).toLowerCase();
+    const noStoreExts = new Set([".html", ".js", ".css"]);
     res.writeHead(200, {
       "content-type": MIME_TYPES.get(ext) || "application/octet-stream",
-      "cache-control": ext === ".html" ? "no-store" : "public, max-age=3600"
+      "cache-control": noStoreExts.has(ext) ? "no-store" : "public, max-age=3600"
     });
     res.end(data);
   } catch {
@@ -288,6 +529,10 @@ const server = http.createServer(async (req, res) => {
     const { pathname } = new URL(req.url, `http://${req.headers.host}`);
     if (pathname === "/health") {
       sendJson(res, 200, { ok: true });
+      return;
+    }
+    if (pathname === "/api/find") {
+      await handleFindApi(req, res);
       return;
     }
     if (pathname === "/api/publish-date") {

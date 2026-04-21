@@ -133,6 +133,17 @@ button:hover {
   opacity: 0.85;
 }
 
+.toggle {
+  width: 100%;
+  font-size: 12px;
+  color: #333;
+  user-select: none;
+}
+
+.toggle input {
+  margin-right: 8px;
+}
+
 /* =========================
    DESKTOP / TABLET (≥768px)
    ========================= */
